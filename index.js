@@ -10,8 +10,50 @@ const app = express();
 app.use(express.json());
 app.use(cors()); // Allows Brilliant Directories to connect to this API
 
-// FIXED: Passed the API key configuration object explicitly to avoid the TypeError crash
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+// We define a native JSON Schema structure. This physically restricts Gemini's output engine,
+// guaranteeing it can only produce raw, perfectly parsed JSON and never output conversational fluff or markdown.
+const responseSchema = {
+  type: "object",
+  properties: {
+    status: {
+      type: "string",
+      enum: ["in_progress", "complete"],
+      description: "Sets to 'in_progress' while onboarding is active, and switches to 'complete' once requirements are finalized."
+    },
+    aiMessage: {
+      type: "string",
+      description: "Your consultative, expert onboarding reply or follow-up question to the client."
+    },
+    projectSummary: {
+      type: "object",
+      properties: {
+        projectTitle: { 
+          type: "string", 
+          description: "A short, professional title for their website project." 
+        },
+        projectDescription: { 
+          type: "string", 
+          description: "A highly-detailed, beautiful 2-paragraph draft specification ready for developers to read." 
+        },
+        recommendedTechStack: {
+          type: "array",
+          items: { type: "string" },
+          description: "List of recommended technologies for this specific build (e.g. React, Node.js, Shopify, etc)."
+        },
+        developerSearchKeywords: {
+          type: "array",
+          items: { type: "string" },
+          description: "The primary skill tag to run directory searches on (e.g. 'React', 'CRM', 'Fintech', 'Marketplaces')."
+        }
+      },
+      required: ["projectTitle", "projectDescription", "recommendedTechStack", "developerSearchKeywords"],
+      description: "Must be null while status is 'in_progress', and fully populated ONLY when status becomes 'complete'."
+    }
+  },
+  required: ["status", "aiMessage"]
+};
 
 app.post("/api/rgd-chat", async (req, res) => {
   try {
@@ -42,17 +84,8 @@ app.post("/api/rgd-chat", async (req, res) => {
     const systemInstruction = `
       You are RGD AI, the expert client onboarding agent for "Really Good Developers".
       Review the client's responses and help them discover their requirements.
-      Respond ONLY with raw, valid JSON matching this schema:
-      {
-        "status": "in_progress" | "complete",
-        "aiMessage": "string containing your friendly response/question",
-        "projectSummary": null | {
-          "projectTitle": "string",
-          "projectDescription": "string",
-          "recommendedTechStack": ["string"],
-          "developerSearchKeywords": ["string"]
-        }
-      }
+      If the client is non-technical, translate technical jargon into clear choices like "playful", "luxurious", or "warm".
+      Once you have collected their requirements, feature needs, and visual goals, transition to "complete" and output the project specifications.
     `;
 
     const response = await ai.models.generateContent({
@@ -60,7 +93,8 @@ app.post("/api/rgd-chat", async (req, res) => {
       contents: userInstructions,
       config: {
         systemInstruction: systemInstruction,
-        responseMimeType: "application/json"
+        responseMimeType: "application/json",
+        responseSchema: responseSchema // Native constraint locks Gemini into our exact structure!
       }
     });
 
